@@ -1,16 +1,22 @@
-name: Build Smart Meshio Exe
+name: Auto Sync Smart Meshio Exe
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "main" ]
+  schedule:
+    # 每周一 UTC 02:00 (北京时间 10:00) 自动检查
+    - cron: '0 2 * * 1'
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  check-and-build:
     runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # 获取所有历史记录以便检查 tags
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -20,72 +26,84 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        # 安装 meshio[all] 及其依赖
+        # 安装最新版 meshio
         pip install "meshio[all]" pyinstaller
 
-    # === 核心修改：智能生成入口脚本 ===
-    # 不再去猜 "from meshio._main import main"
-    # 而是让 Python 告诉我们正确的 import 路径是什么
+    # === 关键步骤：检查是否需要更新 ===
+    - name: Check Version and Existance
+      id: check
+      shell: bash
+      run: |
+        # 1. 获取当前安装的 meshio 版本
+        VERSION=$(python -c "import meshio; print(meshio.__version__)")
+        echo "Detected PyPI Meshio version: $VERSION"
+        
+        TAG_NAME="v$VERSION"
+        echo "MESHIO_VER=$VERSION" >> $GITHUB_ENV
+        echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+        
+        # 2. 检查这个 Tag 是否在远程仓库已存在
+        # git ls-remote返回非空说明已存在
+        if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+          echo "Tag $TAG_NAME already exists. Skipping build."
+          echo "SKIP_BUILD=true" >> $GITHUB_ENV
+        else
+          echo "New version detected ($TAG_NAME). Proceeding with build."
+          echo "SKIP_BUILD=false" >> $GITHUB_ENV
+        fi
+
+    # === 下面的步骤全部加上 if 条件 ===
+    
     - name: Generate Entry Script Dynamically
+      if: env.SKIP_BUILD == 'false'
       shell: bash
       run: |
         python -c "
         import sys
         from importlib.metadata import entry_points
-
-        # 查找名为 'meshio' 的控制台命令
-        # 兼容性写法：获取所有 console_scripts 并过滤
         eps = entry_points(group='console_scripts')
         target_ep = next((e for e in eps if e.name == 'meshio'), None)
-
-        if not target_ep:
-            print('CRITICAL: Could not find meshio console script!')
-            sys.exit(1)
-
-        # 解析入口点字符串 (例如 'meshio._main:main')
-        # ep.value 通常是 'module:function' 格式
+        if not target_ep: sys.exit(1)
         mod_name, func_name = target_ep.value.split(':')
-        
-        print(f'Detected Entry Point: Module=[{mod_name}], Function=[{func_name}]')
-
-        # 生成 Python 脚本
         code = f'''
         import sys
-        # 显式导入检测到的模块，让 PyInstaller 能自动识别
         from {mod_name} import {func_name}
-
         if __name__ == \"__main__\":
             sys.exit({func_name}())
         '''
-        
         with open('run_meshio.py', 'w', encoding='utf-8') as f:
             f.write(code)
         "
-        
-        # 打印出来看看生成的脚本长什么样 (调试用)
-        cat run_meshio.py
 
     - name: Build with PyInstaller
+      if: env.SKIP_BUILD == 'false'
       shell: bash
       run: |
-        # --collect-all meshio: 依然保留，因为 meshio 需要加载各种格式插件
-        # --copy-metadata: 解决版本号报错
-        # 我们不需要手动指定 hidden-import meshio._main 了，因为 run_meshio.py 里已经显式 import 了
-        pyinstaller --clean --noconfirm --onefile --name meshio-cli \
+        pyinstaller --clean --noconfirm --onefile \
+          --name "meshio-cli-${{ env.MESHIO_VER }}" \
           --collect-all meshio \
           --collect-all h5py \
           --copy-metadata=meshio \
           run_meshio.py
 
     - name: Verify Executable
+      if: env.SKIP_BUILD == 'false'
       shell: bash
       run: |
-        echo "Testing built executable..."
-        ./dist/meshio-cli.exe --help
-        ./dist/meshio-cli.exe --version
+        ./dist/meshio-cli-${{ env.MESHIO_VER }}.exe --version
 
-    - name: Upload Exe Artifact
-      uses: actions/upload-artifact@v4
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: env.SKIP_BUILD == 'false'
       with:
-        name: meshio-windows-exe-smart
-        path: dist/meshio-cli.exe
+        tag_name: ${{ env.TAG_NAME }}
+        name: Meshio CLI ${{ env.TAG_NAME }}
+        body: |
+          Automatic weekly sync build.
+          Upstream Meshio Version: ${{ env.MESHIO_VER }}
+        draft: false
+        prerelease: false
+        files: |
+          dist/meshio-cli-${{ env.MESHIO_VER }}.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -24,3 +24,16 @@ Open `PowerShell` or `CMD` in the folder where you downloaded the exe.
 
 # Convert with compression
 .\meshio-cli.exe convert input.msh output.xdmf --prune
+```
+
+## 🛠 Features
+
+- **Standalone**: Single file, no dependencies required.
+- **Full Support**: Built with `meshio[all]`, supporting NetCDF, HDF5, CGNS, and more.
+- **Portable**: Can be run from a USB drive.
+
+
+## ⚖️ License
+
+This project is an unofficial build script.
+The original `meshio` library is licensed under MIT.
