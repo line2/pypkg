@@ -1,7 +1,7 @@
-name: Build Fixed Meshio Exe
+name: Build Robust Meshio Exe
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
   push:
     branches: [ "main" ]
 
@@ -10,50 +10,61 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # 1. 检出代码
     - uses: actions/checkout@v4
 
-    # 2. 设置 Python 环境 (推荐 3.10 或 3.11，比较稳定)
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # 3. 安装依赖
-    # 注意：安装 wheel 确保编译环境正常
     - name: Install dependencies
+      # 显式安装 rich 和 importlib-metadata，防止潜在的 import 错误
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install "meshio[all]" pyinstaller
+        pip install "meshio[all]" pyinstaller rich
 
-    # 4. 创建入口脚本
-    # 使用 bash shell 方便写多行文件
     - name: Create Entry Script
       shell: bash
+      # 我们稍微修改一下 Python 脚本，增加一些调试打印，并强制引用 meshio
       run: |
-        echo "import sys" > run_meshio.py
-        echo "from meshio._main import main" >> run_meshio.py
-        echo "if __name__ == '__main__':" >> run_meshio.py
-        echo "    sys.exit(main())" >> run_meshio.py
+        cat <<EOF > run_meshio.py
+        import sys
+        import meshio
+        # 尝试显式导入私有模块，确保 Python 解释器知道它被使用了
+        try:
+            from meshio._main import main
+        except ImportError as e:
+            print("CRITICAL ERROR: Could not import meshio._main")
+            print(e)
+            sys.exit(1)
 
-    # 5. 执行打包 (关键步骤)
-    # --collect-all meshio: 强制收集 meshio 的所有文件，解决 ModuleNotFoundError
-    # --collect-all h5py: 强制收集 h5py，防止处理 .msh/.h5 文件时报错
-    # --clean: 清理缓存
+        if __name__ == '__main__':
+            print(f"Meshio version: {meshio.__version__}")
+            sys.exit(main())
+        EOF
+
     - name: Build with PyInstaller
+      # 关键修改：
+      # 1. --hidden-import=meshio._main : 强制打包 _main 模块
+      # 2. --copy-metadata=meshio : 复制元数据（解决版本号读取报错）
+      # 3. --collect-all meshio : 暴力收集所有相关文件
       run: |
-        pyinstaller --clean --noconfirm --onefile --name meshio-cli --collect-all meshio --collect-all h5py run_meshio.py
+        pyinstaller --clean --noconfirm --onefile --name meshio-cli \
+          --hidden-import=meshio._main \
+          --hidden-import=meshio \
+          --copy-metadata=meshio \
+          --collect-all meshio \
+          --collect-all h5py \
+          run_meshio.py
 
-    # 6. 在 CI 中直接测试 (验证)
-    # 这一步是为了确保生成的 exe 能运行。如果报错，Workflow 会直接变红，不用下载后才发现。
     - name: Verify Executable
       run: |
+        Write-Output "Testing built executable..."
         ./dist/meshio-cli.exe --help
         ./dist/meshio-cli.exe --version
 
-    # 7. 上传构建产物
     - name: Upload Exe Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: meshio-windows-exe-fixed
+        name: meshio-windows-exe-final
         path: dist/meshio-cli.exe
