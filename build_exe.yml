@@ -1,0 +1,64 @@
+name: Build Meshio Windows Exe
+
+# 触发条件：
+# 1. 当推送到 main 分支时
+# 2. 当发布新的 tag (v1.0.0 等) 时
+# 3. 允许手动在 Actions 页面点击 "Run workflow" 触发
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    # 1. 检出代码
+    - uses: actions/checkout@v4
+
+    # 2. 设置 Python 环境
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10' 
+
+    # 3. 安装依赖
+    # 这里我们安装 meshio[all] 以支持所有格式，以及 pyinstaller
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install "meshio[all]" pyinstaller
+
+    # 4. 创建入口脚本
+    # 为了打包方便，我们直接在 CI 过程中生成一个 run_meshio.py 文件
+    - name: Create Entry Script
+      run: |
+        echo "import sys" > run_meshio.py
+        echo "from meshio._main import main" >> run_meshio.py
+        echo "if __name__ == '__main__':" >> run_meshio.py
+        echo "    sys.exit(main())" >> run_meshio.py
+      shell: bash
+
+    # 5. 执行 PyInstaller 打包
+    # --onefile: 单文件
+    # --hidden-import: 手动指定可能丢失的 h5py 模块 (meshio 的常见问题)
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --onefile --name meshio-cli --hidden-import=h5py --hidden-import=h5py.defs --hidden-import=h5py.utils --hidden-import=h5py.h5ac --hidden-import=h5py._proxy run_meshio.py
+
+    # 6. 上传构建产物 (Exe 文件)
+    # 打包成功后，你可以在 Actions 页面的 Artifacts 栏下载这个文件
+    - name: Upload Exe Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: meshio-windows-exe
+        path: dist/meshio-cli.exe
+
+    # 7. (可选) 如果是打 Tag 推送，自动创建 GitHub Release 并上传 exe
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: dist/meshio-cli.exe
