@@ -12,7 +12,7 @@ Go to the **[Releases Page](../../releases)** to download the latest `meshio-cli
 
 ## 🚀 How to Use
 
-### Method 1: Command Line (Recommended)
+### Method: Command Line (Recommended)
 Open `PowerShell` or `CMD` in the folder where you downloaded the exe.
 
 ```powershell
