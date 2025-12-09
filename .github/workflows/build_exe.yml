@@ -1,14 +1,9 @@
-name: Build Meshio Windows Exe
+name: Build Fixed Meshio Exe
 
-# 触发条件：
-# 1. 当推送到 main 分支时
-# 2. 当发布新的 tag (v1.0.0 等) 时
-# 3. 允许手动在 Actions 页面点击 "Run workflow" 触发
 on:
+  workflow_dispatch: # 允许手动触发
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]
-  workflow_dispatch:
 
 jobs:
   build:
@@ -18,47 +13,47 @@ jobs:
     # 1. 检出代码
     - uses: actions/checkout@v4
 
-    # 2. 设置 Python 环境
+    # 2. 设置 Python 环境 (推荐 3.10 或 3.11，比较稳定)
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' 
+        python-version: '3.10'
 
     # 3. 安装依赖
-    # 这里我们安装 meshio[all] 以支持所有格式，以及 pyinstaller
+    # 注意：安装 wheel 确保编译环境正常
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
         pip install "meshio[all]" pyinstaller
 
     # 4. 创建入口脚本
-    # 为了打包方便，我们直接在 CI 过程中生成一个 run_meshio.py 文件
+    # 使用 bash shell 方便写多行文件
     - name: Create Entry Script
+      shell: bash
       run: |
         echo "import sys" > run_meshio.py
         echo "from meshio._main import main" >> run_meshio.py
         echo "if __name__ == '__main__':" >> run_meshio.py
         echo "    sys.exit(main())" >> run_meshio.py
-      shell: bash
 
-    # 5. 执行 PyInstaller 打包
-    # --onefile: 单文件
-    # --hidden-import: 手动指定可能丢失的 h5py 模块 (meshio 的常见问题)
+    # 5. 执行打包 (关键步骤)
+    # --collect-all meshio: 强制收集 meshio 的所有文件，解决 ModuleNotFoundError
+    # --collect-all h5py: 强制收集 h5py，防止处理 .msh/.h5 文件时报错
+    # --clean: 清理缓存
     - name: Build with PyInstaller
       run: |
-        pyinstaller --onefile --name meshio-cli --hidden-import=h5py --hidden-import=h5py.defs --hidden-import=h5py.utils --hidden-import=h5py.h5ac --hidden-import=h5py._proxy run_meshio.py
+        pyinstaller --clean --noconfirm --onefile --name meshio-cli --collect-all meshio --collect-all h5py run_meshio.py
 
-    # 6. 上传构建产物 (Exe 文件)
-    # 打包成功后，你可以在 Actions 页面的 Artifacts 栏下载这个文件
+    # 6. 在 CI 中直接测试 (验证)
+    # 这一步是为了确保生成的 exe 能运行。如果报错，Workflow 会直接变红，不用下载后才发现。
+    - name: Verify Executable
+      run: |
+        ./dist/meshio-cli.exe --help
+        ./dist/meshio-cli.exe --version
+
+    # 7. 上传构建产物
     - name: Upload Exe Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: meshio-windows-exe
+        name: meshio-windows-exe-fixed
         path: dist/meshio-cli.exe
-
-    # 7. (可选) 如果是打 Tag 推送，自动创建 GitHub Release 并上传 exe
-    - name: Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: dist/meshio-cli.exe
